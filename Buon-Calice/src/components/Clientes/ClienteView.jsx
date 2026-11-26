@@ -249,7 +249,9 @@ export default function ClienteView() {
             return;
         }
 
-        const idUsuario = Number(usuarioActivo.id_usuario || usuarioActivo.idUsuario || usuarioActivo.id);
+        const idUsuario = Number(
+            usuarioActivo.id_usuario ?? usuarioActivo.idUsuario ?? usuarioActivo.IdUsuario ?? usuarioActivo.id
+        );
         if (!idUsuario || isNaN(idUsuario)) {
             setHistorialPedidos([]);
             return;
@@ -428,7 +430,7 @@ export default function ClienteView() {
         setProcesandoPago(true);
 
         const idUsuarioReal = usuarioActivo
-            ? (usuarioActivo.id_usuario || usuarioActivo.idUsuario || usuarioActivo.id)
+            ? (usuarioActivo.id_usuario ?? usuarioActivo.idUsuario ?? usuarioActivo.IdUsuario ?? usuarioActivo.id)
             : 1;
 
         const total = carrito.reduce((acc, curr) => acc + curr.precio * curr.cantidad, 0);
@@ -439,6 +441,7 @@ export default function ClienteView() {
             // 1. Registrar el pedido en SQL Server (en estado PENDIENTE)
             const datosPedidoDTO = {
                 usuarioId: parseInt(idUsuarioReal),
+                telefonoCliente: (usuarioActivo?.telefono || cliTelefono || '').toString().trim(),
                 metodoPago: metodoInicial,
                 productos: carrito.map(item => ({
                     productoId: item.id,
