@@ -19,6 +19,6 @@ jobs:
           action: "upload"
           app_location: "/Buon-Calice"
           api_location: ""
-          output_location: "dist"
+          output_location: "wwwroot"
         env:
           VITE_API_URL: https://buon-calice-fhfefadvd2bygphx.westcentralus-01.azurewebsites.net
