@@ -1,0 +1,24 @@
+name: Azure Static Web Apps CI/CD
+
+on:
+  push:
+    branches:
+      - develop-daniel
+
+jobs:
+  build_and_deploy_job:
+    runs-on: ubuntu-latest
+    name: Build and Deploy Job
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build And Deploy
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ d29aad53b2e64f7cff653e6ff196c657dafb3e93d1a835a2c419a4d1472ed05706-5757cb13-41df-4dc4-b3a1-6c8df242bb4001e29290cf0ba61e}}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "/"
+          api_location: ""
+          output_location: "dist"
+        env:
+          VITE_API_URL: https://buon-calice-fhfefadvd2bygphx.westcentralus-01.azurewebsites.net
