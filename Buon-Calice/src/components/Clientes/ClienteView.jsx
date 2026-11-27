@@ -7,6 +7,36 @@ const API_BASE_URL = 'https://buon-calice-fhfefadvd2bygphx.westcentralus-01.azur
 const API_PEDIDOS_URL = `${API_BASE_URL}/Pedidos`;
 const API_MERCADOPAGO_URL = `${API_BASE_URL}/MercadoPago`;
 
+const obtenerUsuarioDeStorage = () => {
+    try {
+        const raw = localStorage.getItem('cliente_buoncalice') || localStorage.getItem('usuario_cliente');
+        return raw ? JSON.parse(raw) : null;
+    } catch {
+        return null;
+    }
+};
+
+const obtenerIdUsuario = (usuario) => {
+    if (!usuario) return null;
+    const id = usuario.id_usuario ?? usuario.idUsuario ?? usuario.IdUsuario ?? usuario.id;
+    return id !== undefined && id !== null && !isNaN(Number(id)) ? Number(id) : null;
+};
+
+const obtenerKeyCarrito = (idUsuario) =>
+    idUsuario ? `carrito_buoncalice_user_${idUsuario}` : 'carrito_buoncalice_invitado';
+
+const obtenerKeyUltimoPedido = (idUsuario) =>
+    idUsuario ? `ultimoPedido_user_${idUsuario}` : 'ultimoPedido_invitado';
+
+const leerJsonStorage = (key, fallback) => {
+    try {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : fallback;
+    } catch {
+        return fallback;
+    }
+};
+
 const RenderImagenBotella = ({ url, alt, className = "w-full h-full object-contain p-2" }) => {
     const esUrlValida = typeof url === 'string' && (
         url.startsWith('http://') ||
@@ -43,14 +73,19 @@ export default function ClienteView() {
     const [productos, setProductos] = useState([]);
     const [cargandoApi, setCargandoApi] = useState(true);
 
-    // Persistencia del carrito en localStorage para no perder artículos sin conexión
+    // Inicializar sesión, carrito y último pedido vinculados al usuario activo
+    const [usuarioSesion, setUsuarioSesion] = useState(() => obtenerUsuarioDeStorage());
+
     const [carrito, setCarrito] = useState(() => {
-        try {
-            const guardado = localStorage.getItem('carrito_buoncalice');
-            return guardado ? JSON.parse(guardado) : [];
-        } catch {
-            return [];
-        }
+        const user = obtenerUsuarioDeStorage();
+        const idUser = obtenerIdUsuario(user);
+        return leerJsonStorage(obtenerKeyCarrito(idUser), []);
+    });
+
+    const [ultimoPedido, setUltimoPedido] = useState(() => {
+        const user = obtenerUsuarioDeStorage();
+        const idUser = obtenerIdUsuario(user);
+        return leerJsonStorage(obtenerKeyUltimoPedido(idUser), null);
     });
 
     const [prodSeleccionado, setProdSeleccionado] = useState(null);
@@ -60,47 +95,45 @@ export default function ClienteView() {
     const [mostrarBuscador, setMostrarBuscador] = useState(false);
     const [splashVisible, setSplashVisible] = useState(true);
 
-    // Paginación de 10 en 10 para "Todos" y cada categoría
     const [paginaCatalogo, setPaginaCatalogo] = useState(1);
     const PRODUCTOS_POR_PAGINA = 10;
-
-    const [usuarioSesion, setUsuarioSesion] = useState(null);
-
-    const [ultimoPedido, setUltimoPedido] = useState(() => {
-        try {
-            const data = localStorage.getItem('ultimoPedido');
-            return data ? JSON.parse(data) : null;
-        } catch {
-            return null;
-        }
-    });
 
     // Historial completo de pedidos anteriores del cliente
     const [historialPedidos, setHistorialPedidos] = useState([]);
     const [cargandoHistorial, setCargandoHistorial] = useState(false);
     const [pedidoExpandidoId, setPedidoExpandidoId] = useState(null);
 
-    const [cliNombre, setCliNombre] = useState('');
-    const [cliCorreo, setCliCorreo] = useState('');
-    const [cliTelefono, setCliTelefono] = useState('');
+    const [cliNombre, setCliNombre] = useState(() => obtenerUsuarioDeStorage()?.nombre || '');
+    const [cliCorreo, setCliCorreo] = useState(() => obtenerUsuarioDeStorage()?.correo || '');
+    const [cliTelefono, setCliTelefono] = useState(() => obtenerUsuarioDeStorage()?.telefono || '');
     const [errorTelefono, setErrorTelefono] = useState('');
     const [metodoPago, setMetodoPago] = useState('Pagar en línea');
     const [procesandoPago, setProcesandoPago] = useState(false);
 
-    const [perfil, setPerfil] = useState({
-        nombre: 'No registrado',
-        correo: 'No registrado',
-        telefono: 'No registrado'
+    const [perfil, setPerfil] = useState(() => {
+        const user = obtenerUsuarioDeStorage();
+        return user
+            ? {
+                nombre: user.nombre || 'Sin nombre',
+                correo: user.correo || 'Sin correo',
+                telefono: user.telefono || 'Sin teléfono'
+            }
+            : {
+                nombre: 'No registrado',
+                correo: 'No registrado',
+                telefono: 'No registrado'
+            };
     });
 
-    // Sincronizar carrito en localStorage cada vez que cambie
+    // Sincronizar carrito en localStorage bajo la llave específica del usuario actual
     useEffect(() => {
         try {
-            localStorage.setItem('carrito_buoncalice', JSON.stringify(carrito));
+            const idUser = obtenerIdUsuario(usuarioSesion);
+            localStorage.setItem(obtenerKeyCarrito(idUser), JSON.stringify(carrito));
         } catch (e) {
             console.error('Error guardando carrito local:', e);
         }
-    }, [carrito]);
+    }, [carrito, usuarioSesion]);
 
     // Detección de conexión a internet en tiempo real
     useEffect(() => {
@@ -116,17 +149,19 @@ export default function ClienteView() {
         };
     }, []);
 
-    // Cargar sesión del cliente y splash screen
+    // Cargar/restaurar sesión, carrito y pedidos al entrar o volver de iniciar sesión
     useEffect(() => {
         const timer = setTimeout(() => {
             setSplashVisible(false);
-        }, 1500);
+        }, 1200);
 
-        const clienteGuardado = localStorage.getItem('cliente_buoncalice') || localStorage.getItem('usuario_cliente');
-        if (clienteGuardado) {
-            try {
-                const parsed = JSON.parse(clienteGuardado);
-                setUsuarioSesion(parsed);
+        const sincronizarSesionActiva = () => {
+            const parsed = obtenerUsuarioDeStorage();
+            const idUser = obtenerIdUsuario(parsed);
+
+            setUsuarioSesion(parsed);
+
+            if (parsed) {
                 setCliNombre(parsed.nombre || '');
                 setCliCorreo(parsed.correo || '');
                 setCliTelefono(parsed.telefono || '');
@@ -135,12 +170,33 @@ export default function ClienteView() {
                     correo: parsed.correo || 'Sin correo',
                     telefono: parsed.telefono || 'Sin teléfono'
                 });
-            } catch (e) {
-                console.error("Error al leer la sesión del cliente", e);
-            }
-        }
 
-        return () => clearTimeout(timer);
+                // Restaurar el carrito y último pedido propios de este usuario
+                const carritoUsuario = leerJsonStorage(obtenerKeyCarrito(idUser), []);
+                const ultimoPedidoUsuario = leerJsonStorage(obtenerKeyUltimoPedido(idUser), null);
+                setCarrito(carritoUsuario);
+                setUltimoPedido(ultimoPedidoUsuario);
+            } else {
+                // Sin sesión activa: limpiar pantalla
+                setCliNombre('');
+                setCliCorreo('');
+                setCliTelefono('');
+                setPerfil({ nombre: 'No registrado', correo: 'No registrado', telefono: 'No registrado' });
+                setCarrito([]);
+                setUltimoPedido(null);
+                setHistorialPedidos([]);
+            }
+        };
+
+        sincronizarSesionActiva();
+        window.addEventListener('storage', sincronizarSesionActiva);
+        window.addEventListener('focus', sincronizarSesionActiva);
+
+        return () => {
+            clearTimeout(timer);
+            window.removeEventListener('storage', sincronizarSesionActiva);
+            window.removeEventListener('focus', sincronizarSesionActiva);
+        };
     }, []);
 
     // Validar regreso oficial desde Mercado Pago Checkout Pro (?pago=exito o ?pago=cancelado)
@@ -154,6 +210,10 @@ export default function ClienteView() {
 
         const verificarRetornoMercadoPago = async () => {
             setSplashVisible(false);
+            const userActivo = obtenerUsuarioDeStorage();
+            const idUser = obtenerIdUsuario(userActivo);
+            const keyCarrito = obtenerKeyCarrito(idUser);
+            const keyPedido = obtenerKeyUltimoPedido(idUser);
 
             if (estadoPago === 'exito' && paymentId && paymentId !== 'null') {
                 try {
@@ -166,13 +226,14 @@ export default function ClienteView() {
                         })
                     });
 
-                    const data = await res.json();
+                    const textoRes = await res.text();
+                    const data = textoRes ? JSON.parse(textoRes) : {};
 
                     if (res.ok && data.pagado) {
                         setCarrito([]);
-                        localStorage.removeItem('carrito_buoncalice');
+                        localStorage.removeItem(keyCarrito);
 
-                        const pedidoPrevio = JSON.parse(localStorage.getItem('ultimoPedido') || '{}');
+                        const pedidoPrevio = leerJsonStorage(keyPedido, {});
                         const pedidoConfirmado = {
                             ...pedidoPrevio,
                             idPedido: parseInt(pedidoId, 10),
@@ -180,7 +241,7 @@ export default function ClienteView() {
                             metodoPago: `Mercado Pago PAGADO (#${data.transaccionId || paymentId})`,
                             estado: pedidoPrevio.estado || 'PENDIENTE'
                         };
-                        localStorage.setItem('ultimoPedido', JSON.stringify(pedidoConfirmado));
+                        localStorage.setItem(keyPedido, JSON.stringify(pedidoConfirmado));
                         setUltimoPedido(pedidoConfirmado);
                         setSeccion('sec-exito');
                     } else {
@@ -199,7 +260,6 @@ export default function ClienteView() {
                 setSeccion('sec-estado');
             }
 
-            // Limpiar parámetros de la URL para evitar re-ejecuciones al recargar
             window.history.replaceState({}, document.title, '/');
         };
 
@@ -244,18 +304,10 @@ export default function ClienteView() {
     const cargarHistorialPedidos = async () => {
         if (!navigator.onLine) return;
 
-        const clienteGuardado = localStorage.getItem('cliente_buoncalice') || localStorage.getItem('usuario_cliente');
-        const usuarioActivo = clienteGuardado ? JSON.parse(clienteGuardado) : usuarioSesion;
+        const usuarioActivo = obtenerUsuarioDeStorage() || usuarioSesion;
+        const idUsuario = obtenerIdUsuario(usuarioActivo);
 
-        if (!usuarioActivo) {
-            setHistorialPedidos([]);
-            return;
-        }
-
-        const idUsuario = Number(
-            usuarioActivo.id_usuario ?? usuarioActivo.idUsuario ?? usuarioActivo.IdUsuario ?? usuarioActivo.id
-        );
-        if (!idUsuario || isNaN(idUsuario)) {
+        if (!idUsuario) {
             setHistorialPedidos([]);
             return;
         }
@@ -268,6 +320,27 @@ export default function ClienteView() {
             const lista = Array.isArray(data) ? data : [];
 
             setHistorialPedidos(lista);
+
+            // Si no había un último pedido en localStorage pero el usuario sí tiene pedidos en BD,
+            // tomar el más reciente que no esté ENTREGADO como pedido en curso
+            const keyPedido = obtenerKeyUltimoPedido(idUsuario);
+            const pedidoLocal = leerJsonStorage(keyPedido, null);
+            if (!pedidoLocal && lista.length > 0) {
+                const masReciente = lista[0];
+                const estReciente = (masReciente.estado || '').toUpperCase();
+                if (estReciente !== 'ENTREGADO') {
+                    const idPedReciente = masReciente.idPedido || masReciente.id_pedido || masReciente.id;
+                    const adaptado = {
+                        idPedido: idPedReciente,
+                        codigo: masReciente.codigo || `BC-${idPedReciente}`,
+                        total: masReciente.total,
+                        metodoPago: masReciente.metodoPago,
+                        estado: masReciente.estado
+                    };
+                    setUltimoPedido(adaptado);
+                    localStorage.setItem(keyPedido, JSON.stringify(adaptado));
+                }
+            }
         } catch (err) {
             console.error('Error cargando historial de pedidos:', err);
         } finally {
@@ -275,16 +348,18 @@ export default function ClienteView() {
         }
     };
 
-    // Cargar historial automáticamente al entrar a "Pedido" o "Perfil"
+    // Cargar historial automáticamente al iniciar sesión o al entrar a "Pedido" / "Perfil"
     useEffect(() => {
-        if ((seccion === 'sec-estado' || seccion === 'sec-perfil') && isOnline) {
+        if (usuarioSesion && isOnline) {
             cargarHistorialPedidos();
+        } else if (!usuarioSesion) {
+            setHistorialPedidos([]);
         }
-    }, [seccion, isOnline, usuarioSesion]);
+    }, [usuarioSesion, isOnline, seccion]);
 
     // Polling para rastrear pedidos en tiempo real desde Azure
     useEffect(() => {
-        if (!ultimoPedido || !isOnline) return;
+        if (!ultimoPedido || !usuarioSesion || !isOnline) return;
 
         const idBuscar = ultimoPedido.idPedido || ultimoPedido.id_pedido || ultimoPedido.id;
         if (!idBuscar) return;
@@ -301,7 +376,8 @@ export default function ClienteView() {
                     if (nuevoEstado && nuevoEstado !== ultimoPedido.estado) {
                         const pedidoActualizado = { ...ultimoPedido, estado: nuevoEstado };
                         setUltimoPedido(pedidoActualizado);
-                        localStorage.setItem('ultimoPedido', JSON.stringify(pedidoActualizado));
+                        const idUser = obtenerIdUsuario(usuarioSesion);
+                        localStorage.setItem(obtenerKeyUltimoPedido(idUser), JSON.stringify(pedidoActualizado));
                         if (seccion === 'sec-estado') {
                             cargarHistorialPedidos();
                         }
@@ -316,7 +392,7 @@ export default function ClienteView() {
         const interval = setInterval(consultarEstado, 4000);
 
         return () => clearInterval(interval);
-    }, [ultimoPedido, isOnline, seccion]);
+    }, [ultimoPedido, usuarioSesion, isOnline, seccion]);
 
     const verDetalle = (prod) => {
         if (!navigator.onLine) {
@@ -367,7 +443,6 @@ export default function ClienteView() {
         setCarrito((prev) => prev.filter((item) => item.id !== idProducto));
     };
 
-    // Volver a pedir los artículos de un pedido anterior
     const volverAPedir = (pedidoHistorial) => {
         if (!navigator.onLine) {
             alert('Para seguir comprando reconectate a internet');
@@ -416,10 +491,11 @@ export default function ClienteView() {
             return;
         }
 
-        const clienteGuardado = localStorage.getItem('cliente_buoncalice') || localStorage.getItem('usuario_cliente');
-        const usuarioActivo = clienteGuardado ? JSON.parse(clienteGuardado) : usuarioSesion;
+        const usuarioActivo = obtenerUsuarioDeStorage() || usuarioSesion;
+        const idUsuarioReal = obtenerIdUsuario(usuarioActivo) || 1;
+        const keyCarrito = obtenerKeyCarrito(obtenerIdUsuario(usuarioActivo));
+        const keyPedido = obtenerKeyUltimoPedido(obtenerIdUsuario(usuarioActivo));
 
-        // Validar que el teléfono coincida con el registrado en la sesión del cliente
         const telefonoGuardado = (usuarioActivo?.telefono || '').toString().replace(/\D/g, '');
         const telefonoIngresado = (cliTelefono || '').toString().replace(/\D/g, '');
 
@@ -432,18 +508,13 @@ export default function ClienteView() {
         setErrorTelefono('');
         setProcesandoPago(true);
 
-        const idUsuarioReal = usuarioActivo
-            ? (usuarioActivo.id_usuario ?? usuarioActivo.idUsuario ?? usuarioActivo.IdUsuario ?? usuarioActivo.id)
-            : 1;
-
         const total = carrito.reduce((acc, curr) => acc + curr.precio * curr.cantidad, 0);
         const esPagoMercadoPago = metodoPago === 'Pagar en línea';
         const metodoInicial = esPagoMercadoPago ? 'Mercado Pago PENDIENTE' : 'Pagar al recoger';
 
         try {
-            // 1. Registrar el pedido en SQL Server (en estado PENDIENTE)
             const datosPedidoDTO = {
-                usuarioId: parseInt(idUsuarioReal),
+                usuarioId: parseInt(idUsuarioReal, 10),
                 telefonoCliente: (usuarioActivo?.telefono || cliTelefono || '').toString().trim(),
                 metodoPago: metodoInicial,
                 productos: carrito.map(item => ({
@@ -472,10 +543,9 @@ export default function ClienteView() {
                 estado: respuestaAPI?.estado || 'PENDIENTE'
             };
 
-            localStorage.setItem('ultimoPedido', JSON.stringify(nuevoPedido));
+            localStorage.setItem(keyPedido, JSON.stringify(nuevoPedido));
             setUltimoPedido(nuevoPedido);
 
-            // 2. Si eligió pago en línea, generar preferencia de Mercado Pago Checkout Pro y redirigir
             if (esPagoMercadoPago) {
                 const resMP = await fetch(`${API_MERCADOPAGO_URL}/crear-preferencia/${idGenerado}`, {
                     method: 'POST',
@@ -485,19 +555,24 @@ export default function ClienteView() {
                     })
                 });
 
-                const dataMP = await resMP.json();
+                const textoMP = await resMP.text();
+                let dataMP = {};
+                try {
+                    dataMP = textoMP ? JSON.parse(textoMP) : {};
+                } catch {
+                    dataMP = { mensaje: `Error del servidor (HTTP ${resMP.status})` };
+                }
+
                 const checkoutUrl = dataMP.url || dataMP.initPoint || dataMP.sandboxInitPoint;
 
                 if (!resMP.ok || !checkoutUrl) {
-                    throw new Error(dataMP.mensaje || dataMP.error || 'No se pudo iniciar la pasarela de Mercado Pago.');
+                    throw new Error(dataMP.mensaje || dataMP.error || `Error HTTP ${resMP.status} al iniciar Mercado Pago.`);
                 }
 
-                // Redirigir al checkout oficial de Mercado Pago
                 window.location.href = checkoutUrl;
                 return;
             }
 
-            // 3. Si eligió pagar al recoger en sucursal, finalizar flujo directo
             const data = await getProductos(true);
             setProductos((data || []).map(p => ({
                 id: p.idProducto || p.id,
@@ -510,7 +585,7 @@ export default function ClienteView() {
             })));
 
             setCarrito([]);
-            localStorage.removeItem('carrito_buoncalice');
+            localStorage.removeItem(keyCarrito);
             setSeccion('sec-exito');
         } catch (err) {
             alert('Error al procesar el pedido: ' + err.message);
@@ -519,17 +594,34 @@ export default function ClienteView() {
         }
     };
 
+    // Al cerrar sesión: guarda el carrito/pedido bajo el ID del usuario y limpia la pantalla
     const handleCerrarSesion = () => {
+        const idUser = obtenerIdUsuario(usuarioSesion);
+        if (idUser) {
+            localStorage.setItem(obtenerKeyCarrito(idUser), JSON.stringify(carrito));
+            if (ultimoPedido) {
+                localStorage.setItem(obtenerKeyUltimoPedido(idUser), JSON.stringify(ultimoPedido));
+            }
+        }
+
+        // Eliminar solo la sesión activa (manteniendo los datos guardados por ID de usuario)
         localStorage.removeItem('cliente_buoncalice');
         localStorage.removeItem('usuario_cliente');
+        localStorage.removeItem('carrito_buoncalice');
+        localStorage.removeItem('ultimoPedido');
+
         setUsuarioSesion(null);
+        setCarrito([]);
+        setUltimoPedido(null);
         setHistorialPedidos([]);
+        setPedidoExpandidoId(null);
         setPerfil({ nombre: 'No registrado', correo: 'No registrado', telefono: 'No registrado' });
         setCliNombre('');
         setCliCorreo('');
         setCliTelefono('');
         setErrorTelefono('');
-        alert('Sesión de cliente cerrada correctamente.');
+        setSeccion('sec-catalogo');
+        alert('Sesión cerrada. Tu carrito y pedidos quedaron guardados en tu cuenta.');
     };
 
     const categoriasUnicas = ['Todos', 'Whisky', 'Bourbon', 'Vino Tinto', 'Vino Blanco', 'Tequila', 'Ron'];
@@ -543,13 +635,11 @@ export default function ClienteView() {
         return coincideCat && coincideBusqueda;
     });
 
-    // Cálculo de paginación (10 en 10)
     const totalPaginas = Math.max(1, Math.ceil(productosFiltrados.length / PRODUCTOS_POR_PAGINA));
     const paginaSegura = Math.min(paginaCatalogo, totalPaginas);
     const indiceInicio = (paginaSegura - 1) * PRODUCTOS_POR_PAGINA;
     const productosPaginados = productosFiltrados.slice(indiceInicio, indiceInicio + PRODUCTOS_POR_PAGINA);
 
-    // Agrupa por categoría únicamente los 10 productos de la página actual
     const categoriasAgrupadas = productosPaginados.reduce((acc, p) => {
         if (!acc[p.categoria]) acc[p.categoria] = [];
         acc[p.categoria].push(p);
@@ -606,7 +696,6 @@ export default function ClienteView() {
                     </div>
                 </div>
 
-                {/* AVISO DE SIN CONEXIÓN A INTERNET */}
                 {!isOnline && (
                     <div className="max-w-md mx-auto bg-rose-500/15 border border-rose-500/40 text-rose-300 px-4 py-2.5 rounded-xl text-xs text-center font-semibold">
                         📡 Para seguir comprando reconectate a internet
@@ -722,7 +811,6 @@ export default function ClienteView() {
                                         </div>
                                     ))}
 
-                                    {/* CONTROLES DE PAGINACIÓN (10 EN 10) */}
                                     {totalPaginas > 1 && (
                                         <div className="flex items-center justify-between pt-4 border-t border-[#26201B] text-xs">
                                             <button
@@ -995,15 +1083,17 @@ export default function ClienteView() {
                     </section>
                 )}
 
-                {/* SECCIÓN DE ESTADO ACTUAL + HISTORIAL DE MIS PEDIDOS ANTERIORES */}
                 {seccion === 'sec-estado' && (
                     <section className="space-y-6">
-                        {/* PEDIDO RECIENTE / EN CURSO */}
                         <div className="space-y-3">
                             <h3 className="text-xs uppercase tracking-wider text-[#C5A059] font-medium">Pedido Actual en Curso</h3>
                             <div className="bg-[#16120E] border border-[#26201B] p-5 rounded-2xl space-y-3 text-xs">
-                                {!ultimoPedido ? (
-                                    <p className="text-center text-[#9E8E7E]">No tienes ningún pedido reciente en curso.</p>
+                                {!usuarioSesion || !ultimoPedido ? (
+                                    <p className="text-center text-[#9E8E7E]">
+                                        {usuarioSesion
+                                            ? 'No tienes ningún pedido reciente en curso.'
+                                            : 'Inicia sesión para ver tus pedidos activos.'}
+                                    </p>
                                 ) : (
                                     <>
                                         <div className="border-b border-[#26201B] pb-2 mb-2 space-y-1">
@@ -1029,11 +1119,10 @@ export default function ClienteView() {
                             </div>
                         </div>
 
-                        {/* HISTORIAL COMPLETO DESDE SQL SERVER */}
                         <div className="space-y-3">
                             <div className="flex justify-between items-center">
                                 <h3 className="text-xs uppercase tracking-wider text-[#C5A059] font-medium">
-                                    Mis Pedidos Anteriores ({historialPedidos.length})
+                                    Mis Pedidos Anteriores ({usuarioSesion ? historialPedidos.length : 0})
                                 </h3>
                                 {isOnline && usuarioSesion && (
                                     <button
@@ -1111,7 +1200,6 @@ export default function ClienteView() {
                                                     </span>
                                                 </div>
 
-                                                {/* Desglose desplegable de botellas */}
                                                 {detalles.length > 0 && (
                                                     <div className="pt-1">
                                                         <button
