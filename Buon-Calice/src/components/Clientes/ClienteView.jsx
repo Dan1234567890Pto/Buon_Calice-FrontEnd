@@ -5,7 +5,7 @@ import './Cliente.css';
 
 const API_BASE_URL = 'https://buon-calice-fhfefadvd2bygphx.westcentralus-01.azurewebsites.net/api';
 const API_PEDIDOS_URL = `${API_BASE_URL}/Pedidos`;
-const API_PAGOS_URL = `${API_BASE_URL}/Pagos`;
+const API_MERCADOPAGO_URL = `${API_BASE_URL}/MercadoPago`;
 
 const RenderImagenBotella = ({ url, alt, className = "w-full h-full object-contain p-2" }) => {
     const esUrlValida = typeof url === 'string' && (
@@ -143,25 +143,25 @@ export default function ClienteView() {
         return () => clearTimeout(timer);
     }, []);
 
-    // Validar regreso oficial desde Stripe Checkout (?pago=exito o ?pago=cancelado)
+    // Validar regreso oficial desde Mercado Pago Checkout Pro (?pago=exito o ?pago=cancelado)
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const estadoPago = params.get('pago');
-        const sessionId = params.get('session_id');
-        const pedidoId = params.get('pedidoId');
+        const paymentId = params.get('payment_id') || params.get('collection_id');
+        const pedidoId = params.get('pedidoId') || params.get('external_reference');
 
         if (!estadoPago || !pedidoId) return;
 
-        const verificarRetornoStripe = async () => {
+        const verificarRetornoMercadoPago = async () => {
             setSplashVisible(false);
 
-            if (estadoPago === 'exito' && sessionId) {
+            if (estadoPago === 'exito' && paymentId && paymentId !== 'null') {
                 try {
-                    const res = await fetch(`${API_PAGOS_URL}/confirmar-pago`, {
+                    const res = await fetch(`${API_MERCADOPAGO_URL}/confirmar-pago`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            sessionId: sessionId,
+                            paymentId: paymentId,
                             pedidoId: parseInt(pedidoId, 10)
                         })
                     });
@@ -177,22 +177,25 @@ export default function ClienteView() {
                             ...pedidoPrevio,
                             idPedido: parseInt(pedidoId, 10),
                             codigo: pedidoPrevio.codigo || `BC-${pedidoId}`,
-                            metodoPago: `Stripe PAGADO (${data.transaccionId || 'Confirmado'})`,
+                            metodoPago: `Mercado Pago PAGADO (#${data.transaccionId || paymentId})`,
                             estado: pedidoPrevio.estado || 'PENDIENTE'
                         };
                         localStorage.setItem('ultimoPedido', JSON.stringify(pedidoConfirmado));
                         setUltimoPedido(pedidoConfirmado);
                         setSeccion('sec-exito');
                     } else {
-                        alert(`⚠️ Stripe aún reporta el estado: ${data.estado || 'pendiente'}. Tu pedido #${pedidoId} sigue como PENDIENTE.`);
+                        alert(`⚠️ Mercado Pago reporta el estado: ${data.estado || 'pendiente'}. Tu pedido #${pedidoId} sigue como PENDIENTE.`);
                         setSeccion('sec-estado');
                     }
                 } catch (err) {
-                    console.error('Error al confirmar pago con Stripe:', err);
+                    console.error('Error al confirmar pago con Mercado Pago:', err);
                     alert('No se pudo validar el pago con el servidor. Revisa tu conexión.');
                 }
+            } else if (estadoPago === 'pendiente') {
+                alert(`⏳ Tu pago en Mercado Pago está pendiente de acreditación. Tu pedido #${pedidoId} quedó registrado.`);
+                setSeccion('sec-estado');
             } else if (estadoPago === 'cancelado') {
-                alert(`❌ Pago cancelado o rechazado en Stripe. Tu pedido #${pedidoId} permanece PENDIENTE en el sistema.`);
+                alert(`❌ Pago cancelado o rechazado en Mercado Pago. Tu pedido #${pedidoId} permanece PENDIENTE en el sistema.`);
                 setSeccion('sec-estado');
             }
 
@@ -200,7 +203,7 @@ export default function ClienteView() {
             window.history.replaceState({}, document.title, '/');
         };
 
-        verificarRetornoStripe();
+        verificarRetornoMercadoPago();
     }, []);
 
     // Cargar catálogo al iniciar y recargarlo automáticamente si vuelve internet
@@ -434,8 +437,8 @@ export default function ClienteView() {
             : 1;
 
         const total = carrito.reduce((acc, curr) => acc + curr.precio * curr.cantidad, 0);
-        const esPagoStripe = metodoPago === 'Pagar en línea';
-        const metodoInicial = esPagoStripe ? 'Stripe PENDIENTE' : 'Pagar al recoger';
+        const esPagoMercadoPago = metodoPago === 'Pagar en línea';
+        const metodoInicial = esPagoMercadoPago ? 'Mercado Pago PENDIENTE' : 'Pagar al recoger';
 
         try {
             // 1. Registrar el pedido en SQL Server (en estado PENDIENTE)
@@ -472,9 +475,9 @@ export default function ClienteView() {
             localStorage.setItem('ultimoPedido', JSON.stringify(nuevoPedido));
             setUltimoPedido(nuevoPedido);
 
-            // 2. Si eligió pago en línea, generar sesión de Stripe Checkout y redirigir
-            if (esPagoStripe) {
-                const resStripe = await fetch(`${API_PAGOS_URL}/crear-checkout/${idGenerado}`, {
+            // 2. Si eligió pago en línea, generar preferencia de Mercado Pago Checkout Pro y redirigir
+            if (esPagoMercadoPago) {
+                const resMP = await fetch(`${API_MERCADOPAGO_URL}/crear-preferencia/${idGenerado}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -482,14 +485,15 @@ export default function ClienteView() {
                     })
                 });
 
-                const dataStripe = await resStripe.json();
+                const dataMP = await resMP.json();
+                const checkoutUrl = dataMP.url || dataMP.initPoint || dataMP.sandboxInitPoint;
 
-                if (!resStripe.ok || !dataStripe.url) {
-                    throw new Error(dataStripe.mensaje || dataStripe.error || 'No se pudo iniciar la pasarela de Stripe.');
+                if (!resMP.ok || !checkoutUrl) {
+                    throw new Error(dataMP.mensaje || dataMP.error || 'No se pudo iniciar la pasarela de Mercado Pago.');
                 }
 
-                // Redirigir al formulario oficial de Stripe Checkout
-                window.location.href = dataStripe.url;
+                // Redirigir al checkout oficial de Mercado Pago
+                window.location.href = checkoutUrl;
                 return;
             }
 
@@ -921,7 +925,7 @@ export default function ClienteView() {
                                         onChange={(e) => setMetodoPago(e.target.value)}
                                         className="accent-[#C5A059]"
                                     />
-                                    <span>Pagar en línea con Stripe Checkout (Tarjeta)</span>
+                                    <span>Pagar en línea con Mercado Pago (Tarjeta / OXXO)</span>
                                 </label>
                                 <label className="flex items-center gap-2 text-[#F3ECE0] cursor-pointer">
                                     <input
@@ -939,11 +943,11 @@ export default function ClienteView() {
                                 {metodoPago === 'Pagar en línea' && (
                                     <div className="mt-2 bg-[#0D0B0A] border border-[#C5A059]/40 rounded-2xl p-4 space-y-2 text-[11px]">
                                         <div className="flex items-center justify-between text-[#C5A059] font-bold">
-                                            <span>💳 Pasarela Oficial Stripe Checkout</span>
-                                            <span>Modo Prueba</span>
+                                            <span>💳 Pasarela Oficial Mercado Pago</span>
+                                            <span>Checkout Pro</span>
                                         </div>
                                         <p className="text-[#9E8E7E] leading-relaxed">
-                                            Al confirmar, tu pedido se registrará como <strong className="text-amber-400">PENDIENTE</strong> y serás redirigido de forma segura a <strong className="text-[#F3ECE0]">checkout.stripe.com</strong> para ingresar tu tarjeta.
+                                            Al confirmar, tu pedido se registrará como <strong className="text-amber-400">PENDIENTE</strong> y serás redirigido de forma segura a <strong className="text-[#F3ECE0]">Mercado Pago</strong> para completar tu pago.
                                         </p>
                                     </div>
                                 )}
@@ -962,9 +966,9 @@ export default function ClienteView() {
                                 {!isOnline
                                     ? 'PARA SEGUIR COMPRANDO RECONECTATE A INTERNET'
                                     : procesandoPago
-                                        ? '⏳ CONECTANDO CON STRIPE CHECKOUT...'
+                                        ? '⏳ CONECTANDO CON MERCADO PAGO...'
                                         : metodoPago === 'Pagar en línea'
-                                            ? `CONTINUAR A STRIPE ($${totalCarrito}.00)`
+                                            ? `PAGAR CON MERCADO PAGO ($${totalCarrito}.00)`
                                             : 'CONFIRMAR Y FINALIZAR PEDIDO'}
                             </button>
                         </form>
